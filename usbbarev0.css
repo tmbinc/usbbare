@@ -21,6 +21,11 @@ div.usbbare-lazytable-container {
   z-index: 1;
 }
 
+div.usbbare-devicestring {
+  font-style: italic;
+  background-color: #f9f9f9;
+}
+
 div.usbbare-list {
   cursor: default;
   width: 42em;

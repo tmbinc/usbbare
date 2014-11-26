@@ -312,7 +312,9 @@ function build_control_transfer_display(n, tr) {
             ustr += String.fromCharCode(flat_data[i*2+2] | flat_data[i*2+3] << 8);
           }
           n.appendChild(text_div("Descriptor String:"));
-          n.appendChild(text_div(ustr, 5, 15));
+          var d = text_div(ustr, 5, 15);
+          d.className = "usbbare-devicestring";
+          n.appendChild(d);
           break;
         default:
           n.appendChild(text_div(structs.eDescriptorTypes[desctype], 2));

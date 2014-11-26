@@ -1023,7 +1023,16 @@ function process_and_init(rawdata) {
   // Keep the browser happy by processing in chunks and keep the UI loop alive.
 
   console.log('Decoding packets and running state machines...');
-  var i = 0, p = 0, l = rawdata.length;
+  var i = 0, p = 0, l = rawdata.length, is_pcap = 0;
+
+  // check if this is a pcap file
+  if (l > 24 && rawdata[0] == 0xD4 && rawdata[1] == 0xC3 && rawdata[2] == 0xB2 && rawdata[3] == 0xA1) {
+    is_pcap = 1;
+    p = 24; // skip pcap header
+  }
+  console.log("is_pcap=", is_pcap);
+  console.log(rawdata[0], rawdata[1], rawdata[2], rawdata[3]);
+
   function process_block() {
     loading.innerText = 'loading... ' + ((p / l * 100) | 0) + '%';
     while (true) {
@@ -1037,30 +1046,65 @@ function process_and_init(rawdata) {
         return;
       }
 
-      var plen = rawdata[p + 5] | rawdata[p + 6] << 8;
-      var pp = plen === 0 ? null : decoder.decode_packet(rawdata, p+7, plen);
+      if (!is_pcap) {
+        var plen = rawdata[p + 5] | rawdata[p + 6] << 8;
+        var pp = plen === 0 ? null : decoder.decode_packet(rawdata, p+7, plen);
 
-      var success =
-        pp !== null &&  // Check decode
-        (pp.CRC5 === undefined ||  // Check CRC5
-          ((plen === 3 && crclib.crc5_16bit(rawdata[p+8], rawdata[p+9]) === 6) ||
-           (plen === 4 && crclib.crc5_24bit(rawdata[p+8], rawdata[p+9], rawdata[p+10]) === 6))) &&
-        (pp.CRC16 === undefined ||  // Check CRC16
-          (plen >= 3 && crclib.crc16(rawdata, p+8, p+7+plen) === 0xb001));
+        var success =
+          pp !== null &&  // Check decode
+          (pp.CRC5 === undefined ||  // Check CRC5
+            ((plen === 3 && crclib.crc5_16bit(rawdata[p+8], rawdata[p+9]) === 6) ||
+             (plen === 4 && crclib.crc5_24bit(rawdata[p+8], rawdata[p+9], rawdata[p+10]) === 6))) &&
+          (pp.CRC16 === undefined ||  // Check CRC16
+            (plen >= 3 && crclib.crc16(rawdata, p+8, p+7+plen) === 0xb001));
 
-      var packet_id = i << 1 | (success === true ? 1 : 0);
+        var packet_id = i << 1 | (success === true ? 1 : 0);
 
-      var packet = {
-        id: packet_id,
-        f: rawdata[p] | rawdata[p+1] << 8,
-        t: rawdata[p+2] | rawdata[p+3] << 8 | rawdata[p+4] << 16,
-        p: p, plen: plen};
-      packets.push(packet);
-      (success === true ? packets_succ : packets_fail).push(packet);
+        var packet = {
+          id: packet_id,
+          f: rawdata[p] | rawdata[p+1] << 8,
+          t: rawdata[p+2] | rawdata[p+3] << 8 | rawdata[p+4] << 16,
+          p: p, plen: plen};
+        packets.push(packet);
+        (success === true ? packets_succ : packets_fail).push(packet);
 
-      if (success) transaction_machine.process_packet(pp, packet);
+        if (success) transaction_machine.process_packet(pp, packet);
 
-      p += 7 + plen;
+        p += 7 + plen;
+      } else {
+        var ts_sec = rawdata[p + 0] | rawdata[p + 1] << 8 | rawdata[p + 2] << 16 | rawdata[p + 3] << 24;
+        var ts_usec = rawdata[p + 4] | rawdata[p + 5] << 8 | rawdata[p + 6] << 16 | rawdata[p + 7] << 24;
+        var incl_len = rawdata[p + 8] | rawdata[p + 9] << 8 | rawdata[p + 10] << 16 | rawdata[p + 11] << 24;
+        var orig_len = rawdata[p + 12] | rawdata[p + 13] << 8 | rawdata[p + 14] << 16 | rawdata[p + 15] << 24;
+
+        if (incl_len > 2 && incl_len == orig_len) {
+          var plen = incl_len - 2;
+          var pptr = p + 16 + 2;
+          var pp = plen === 0 ? null : decoder.decode_packet(rawdata, pptr, plen);
+
+          var success =
+            pp !== null &&  // Check decode
+            (pp.CRC5 === undefined ||  // Check CRC5
+              ((plen === 3 && crclib.crc5_16bit(rawdata[pptr+1], rawdata[pptr+2]) === 6) ||
+               (plen === 4 && crclib.crc5_24bit(rawdata[pptr+1], rawdata[pptr+2], rawdata[pptr+3]) === 6))) &&
+            (pp.CRC16 === undefined ||  // Check CRC16
+              (plen >= 3 && crclib.crc16(rawdata, pptr+1, pptr+plen) === 0xb001));
+
+          var packet_id = i << 1 | (success === true ? 1 : 0);
+
+          var packet = {
+            id: packet_id,
+            f: rawdata[p+16] | rawdata[p+17] << 8,
+            t: ts_sec + ts_usec / 1e6,
+            p: pptr-7, plen: plen};
+          packets.push(packet);
+          (success === true ? packets_succ : packets_fail).push(packet);
+
+          if (success) transaction_machine.process_packet(pp, packet);
+
+        }
+        p += 16 + incl_len;
+      }
       ++i;
 
       if ((i & 0x3fff) === 0) {
